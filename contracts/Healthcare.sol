@@ -1,11 +1,9 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.28;
-
-// Uncomment this line to use console.log
-// import "hardhat/console.sol";
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 
 contract Healthcare {
-    enum Role { NONE, PATIENT, DOCTOR, ADMIN }
+    enum Role { NONE, PATIENT, DOCTOR }
+    enum RecordType { NONE, EXAMINATION_RECORD, TEST_RESULT, PRESCRIPTION }
 
     struct User {
         Role role;
@@ -16,155 +14,233 @@ contract Healthcare {
     }
 
     struct MedicalRecord {
-        string ipfsHash;
+        address patient;
         address doctor;
+        string ipfsHash;
+        RecordType recordType;
         uint256 timestamp;
+        bool isApproved;
     }
 
-    address public admin;
+    struct SharedRecord {
+        address patient;
+        address doctor;
+        string ipfsHash;
+        RecordType recordType;
+        uint256 timestamp;
+        string notes;
+    }
+
     address[] public userAddresses;
-
     mapping(address => User) public users;
-    mapping(address => MedicalRecord[]) public medicalRecords;
-    mapping(address => address[]) public accessList;
+    mapping(address => uint256) public verificationVotes;
+    MedicalRecord[] public medicalRecords;
+    SharedRecord[] public sharedRecords;
+    uint256 public verifiedDoctorCount;
 
-    event UserRegistered(address indexed user, Role role, string ipfsHash);
-    event DoctorVerified(address indexed doctor);
-    event MedicalRecordAdded(address indexed patient, string ipfsHash, address indexed doctor);
-    event AccessGranted(address indexed patient, address indexed doctor);
-    event UserRemoved(address indexed user);
-    event AdminTransferred(address indexed oldAdmin, address indexed newAdmin);
-
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "Only admin can call this function");
-        _;
-    }
-
-    modifier onlyPatient() {
-        require(users[msg.sender].role == Role.PATIENT, "Only patients can call this function");
-        _;
-    }
-
-    modifier onlyVerifiedDoctor() {
-        require(users[msg.sender].role == Role.DOCTOR && users[msg.sender].isVerified, "Only verified doctors can call this function");
-        _;
-    }
+    event UserRegistered(address indexed user, Role role, string fullName);
+    event DoctorVerified(address indexed doctor, string fullName);
+    event MedicalRecordAdded(uint256 indexed recordIndex, address indexed patient, address indexed doctor, string ipfsHash);
+    event MedicalRecordApproved(uint256 indexed recordIndex, address indexed patient);
+    event MedicalRecordShared(uint256 indexed recordIndex, address indexed patient, address indexed doctor, string ipfsHash);
 
     constructor() {
-        admin = msg.sender;
+        userAddresses.push(msg.sender);
+        users[msg.sender] = User(Role.DOCTOR, true, "", "Admin Doctor", "admin@healthcare.com");
+        verificationVotes[msg.sender] = 1;
+        verifiedDoctorCount = 1;
+        emit UserRegistered(msg.sender, Role.DOCTOR, "Admin Doctor");
+        emit DoctorVerified(msg.sender, "Admin Doctor");
     }
 
-    function register(string memory fullName, string memory email, Role role, string memory ipfsHash) external {
+    function register(string memory fullName, string memory email, Role role, string memory ipfsHash) public {
         require(users[msg.sender].role == Role.NONE, "User already registered");
         require(role == Role.PATIENT || role == Role.DOCTOR, "Invalid role");
-        
-        bool isVerified = (role == Role.PATIENT);
-        users[msg.sender] = User(role, isVerified, ipfsHash, fullName, email);
+
+        users[msg.sender] = User(role, role == Role.PATIENT, ipfsHash, fullName, email);
         userAddresses.push(msg.sender);
-
-        emit UserRegistered(msg.sender, role, ipfsHash);
+        emit UserRegistered(msg.sender, role, fullName);
     }
 
-    function verifyDoctor(address doctorAddress) external onlyAdmin {
-        require(users[doctorAddress].role == Role.DOCTOR, "User is not a doctor");
-        require(!users[doctorAddress].isVerified, "Doctor already verified");
+    function voteForDoctor(address doctorAddress) public {
+        require(users[msg.sender].role == Role.DOCTOR && users[msg.sender].isVerified, "Only verified doctors can vote");
+        require(users[doctorAddress].role == Role.DOCTOR && !users[doctorAddress].isVerified, "Invalid doctor");
+        require(verificationVotes[doctorAddress] < verifiedDoctorCount, "Doctor already verified");
 
-        users[doctorAddress].isVerified = true;
-        emit DoctorVerified(doctorAddress);
-    }
-
-    function addMedicalRecord(address patientAddress, string memory ipfsHash) external onlyVerifiedDoctor {
-        require(users[patientAddress].role == Role.PATIENT, "Invalid patient address");
-
-        medicalRecords[patientAddress].push(MedicalRecord({
-            ipfsHash: ipfsHash,
-            doctor: msg.sender,
-            timestamp: block.timestamp
-        }));
-
-        emit MedicalRecordAdded(patientAddress, ipfsHash, msg.sender);
-    }
-
-    function grantAccess(address doctorAddress) external onlyPatient {
-        require(users[doctorAddress].role == Role.DOCTOR && users[doctorAddress].isVerified, "Invalid or unverified doctor");
-
-        for (uint i = 0; i < accessList[msg.sender].length; i++) {
-            if (accessList[msg.sender][i] == doctorAddress) {
-                revert("Doctor already has access");
-            }
+        verificationVotes[doctorAddress]++;
+        if (verificationVotes[doctorAddress] >= (verifiedDoctorCount / 2) + 1) {
+            users[doctorAddress].isVerified = true;
+            verifiedDoctorCount++;
+            emit DoctorVerified(doctorAddress, users[doctorAddress].fullName);
         }
-        
-        accessList[msg.sender].push(doctorAddress);
-        emit AccessGranted(msg.sender, doctorAddress);
     }
 
-    function getUser(address userAddress) external view returns (string memory fullName, string memory email, Role role, bool isVerified, string memory ipfsHash) {
+    function addMedicalRecord(address patient, string memory ipfsHash, RecordType recordType) public {
+        require(users[msg.sender].role == Role.DOCTOR && users[msg.sender].isVerified, "Only verified doctors can add records");
+        require(users[patient].role == Role.PATIENT && users[patient].isVerified, "Invalid patient");
+        require(recordType != RecordType.NONE, "Invalid record type");
+
+        medicalRecords.push(MedicalRecord(patient, msg.sender, ipfsHash, recordType, block.timestamp, false));
+        emit MedicalRecordAdded(medicalRecords.length - 1, patient, msg.sender, ipfsHash);
+    }
+
+    function approveMedicalRecord(uint256 recordIndex) public {
+        require(recordIndex < medicalRecords.length, "Invalid record index");
+        MedicalRecord storage record = medicalRecords[recordIndex];
+        require(msg.sender == record.patient, "Only patient can approve");
+        require(!record.isApproved, "Record already approved");
+
+        record.isApproved = true;
+        emit MedicalRecordApproved(recordIndex, msg.sender);
+    }
+
+    function shareMedicalRecord(address doctor, string memory ipfsHash, RecordType recordType, string memory notes) public {
+        require(users[msg.sender].role == Role.PATIENT && users[msg.sender].isVerified, "Only verified patients can share");
+        require(users[doctor].role == Role.DOCTOR && users[doctor].isVerified, "Invalid doctor");
+        require(recordType != RecordType.NONE, "Invalid record type");
+
+        sharedRecords.push(SharedRecord(msg.sender, doctor, ipfsHash, recordType, block.timestamp, notes));
+        emit MedicalRecordShared(sharedRecords.length - 1, msg.sender, doctor, ipfsHash);
+    }
+
+    function getUser(address userAddress) public view returns (Role, bool, string memory, string memory, string memory) {
         User memory user = users[userAddress];
-        return (user.fullName, user.email, user.role, user.isVerified, user.ipfsHash);
+        return (user.role, user.isVerified, user.ipfsHash, user.fullName, user.email);
     }
 
-    function getMedicalRecords(address patientAddress) external view returns (MedicalRecord[] memory) {
-        require(
-            msg.sender == patientAddress || 
-            users[msg.sender].role == Role.DOCTOR && hasAccess(patientAddress, msg.sender),
-            "No access to medical records"
-        );
-
-        return medicalRecords[patientAddress];
-    }
-
-    function hasAccess(address patientAddress, address doctorAddress) public view returns (bool) {
-        for (uint i = 0; i < accessList[patientAddress].length; i++) {
-            if (accessList[patientAddress][i] == doctorAddress) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function getAccessList(address patientAddress) external view returns (address[] memory) {
-        require(msg.sender == patientAddress, "Only patient can view their access list");
-        return accessList[patientAddress];
-    }
-
-    function getAllUsers() external view onlyAdmin returns (address[] memory addresses, User[] memory userData) {
-        addresses = userAddresses;
-        User[] memory allUsers = new User[](userAddresses.length);
-        for (uint i = 0; i < userAddresses.length; i++) {
-            allUsers[i] = users[userAddresses[i]];
-        }
-        return (addresses, allUsers);
-    }
-
-    function removeUser(address userAddress) external onlyAdmin {
-        require(userAddress != admin, "Cannot remove admin");
-        require(users[userAddress].role != Role.NONE, "User not registered");
-
-        delete users[userAddress];
-        delete medicalRecords[userAddress];
-        delete accessList[userAddress];
-
-        for (uint i = 0; i < userAddresses.length; i++) {
-            if (userAddresses[i] == userAddress) {
-                userAddresses[i] = userAddresses[userAddresses.length - 1];
-                userAddresses.pop();
-                break;
+    function getAllDoctors() public view returns (address[] memory, bool[] memory, string[] memory, string[] memory) {
+        uint256 doctorCount = 0;
+        for (uint256 i = 0; i < userAddresses.length; i++) {
+            if (users[userAddresses[i]].role == Role.DOCTOR) {
+                doctorCount++;
             }
         }
 
-        emit UserRemoved(userAddress);
+        address[] memory addresses = new address[](doctorCount);
+        bool[] memory isVerified = new bool[](doctorCount);
+        string[] memory fullNames = new string[](doctorCount);
+        string[] memory ipfsHashes = new string[](doctorCount);
+        uint256 index = 0;
+
+        for (uint256 i = 0; i < userAddresses.length; i++) {
+            if (users[userAddresses[i]].role == Role.DOCTOR) {
+                addresses[index] = userAddresses[i];
+                isVerified[index] = users[userAddresses[i]].isVerified;
+                fullNames[index] = users[userAddresses[i]].fullName;
+                ipfsHashes[index] = users[userAddresses[i]].ipfsHash;
+                index++;
+            }
+        }
+
+        return (addresses, isVerified, fullNames, ipfsHashes);
     }
 
-    function transferAdmin(address newAdmin) external onlyAdmin {
-        require(newAdmin != address(0), "Invalid new admin address");
-        require(newAdmin != admin, "New admin must be different");
+    function getMedicalRecords(address patient) public view returns (MedicalRecord[] memory) {
+        uint256 recordCount = 0;
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].patient == patient) {
+                recordCount++;
+            }
+        }
 
-        address oldAdmin = admin;
-        admin = newAdmin;
-        emit AdminTransferred(oldAdmin, newAdmin);
+        MedicalRecord[] memory result = new MedicalRecord[](recordCount);
+        uint256 index = 0;
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].patient == patient) {
+                result[index] = medicalRecords[i];
+                index++;
+            }
+        }
+        return result;
     }
 
-    function getMedicalRecordsByAdmin(address patientAddress) external view onlyAdmin returns (MedicalRecord[] memory) {
-        return medicalRecords[patientAddress];
+    function getMedicalRecordsByDoctor(address doctor) public view returns (MedicalRecord[] memory) {
+        uint256 recordCount = 0;
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].doctor == doctor) {
+                recordCount++;
+            }
+        }
+
+        MedicalRecord[] memory result = new MedicalRecord[](recordCount);
+        uint256 index = 0;
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].doctor == doctor) {
+                result[index] = medicalRecords[i];
+                index++;
+            }
+        }
+        return result;
+    }
+
+    function getAllMedicalRecords() public view returns (MedicalRecord[] memory) {
+        return medicalRecords;
+    }
+
+    function getMedicalRecordsByType(address patient, RecordType recordType) public view returns (MedicalRecord[] memory) {
+        require(recordType != RecordType.NONE, "Invalid record type");
+
+        uint256 recordCount = 0;
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].patient == patient && medicalRecords[i].recordType == recordType) {
+                recordCount++;
+            }
+        }
+
+        MedicalRecord[] memory result = new MedicalRecord[](recordCount);
+        uint256 index = 0;
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].patient == patient && medicalRecords[i].recordType == recordType) {
+                result[index] = medicalRecords[i];
+                index++;
+            }
+        }
+        return result;
+    }
+
+    function getPendingRecords(address patient) public view returns (MedicalRecord[] memory) {
+        uint256 recordCount = 0;
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].patient == patient && !medicalRecords[i].isApproved) {
+                recordCount++;
+            }
+        }
+
+        MedicalRecord[] memory result = new MedicalRecord[](recordCount);
+        uint256 index = 0;
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].patient == patient && !medicalRecords[i].isApproved) {
+                result[index] = medicalRecords[i];
+                index++;
+            }
+        }
+        return result;
+    }
+
+    function getPatientSharedRecords(address patient) public view returns (SharedRecord[] memory) {
+        uint256 recordCount = 0;
+        for (uint256 i = 0; i < sharedRecords.length; i++) {
+            if (sharedRecords[i].patient == patient) {
+                recordCount++;
+            }
+        }
+
+        SharedRecord[] memory result = new SharedRecord[](recordCount);
+        uint256 index = 0;
+        for (uint256 i = 0; i < sharedRecords.length; i++) {
+            if (sharedRecords[i].patient == patient) {
+                result[index] = sharedRecords[i];
+                index++;
+            }
+        }
+        return result;
+    }
+
+    function getVerifiedDoctorCount() public view returns (uint256) {
+        return verifiedDoctorCount;
+    }
+
+    function getUserAddressesLength() public view returns (uint256) {
+        return userAddresses.length;
     }
 }
