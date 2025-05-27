@@ -435,4 +435,16 @@ contract Healthcare {
     function getUserAddressesLength() public view returns (uint256) {
         return userAddresses.length;
     }
+
+    function getRecordIndex(address patient, address doctor, string memory ipfsHash) public view returns (uint256) {
+        for (uint256 i = 0; i < medicalRecords.length; i++) {
+            if (medicalRecords[i].patient == patient &&
+                medicalRecords[i].doctor == doctor &&
+                keccak256(bytes(medicalRecords[i].ipfsHash)) == keccak256(bytes(ipfsHash)) &&
+                !medicalRecords[i].isApproved) {
+                return i;
+            }
+        }
+        revert InvalidRecordIndex();
+    }
 }
