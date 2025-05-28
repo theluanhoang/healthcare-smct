@@ -506,8 +506,9 @@ contract Healthcare is ERC20, Ownable, Pausable {
         uint256 endTime,
         Role targetRole
     ) external onlyOwner whenNotPaused {
-        require(startTime >= block.timestamp, "Start time must be in the future");
-        require(endTime > startTime, "End time must be after start time");
+        // Temporarily remove all time validations
+        // require(startTime >= block.timestamp, "Start time must be in the future");
+        // require(endTime > startTime, "End time must be after start time");
         require(reward > 0, "Reward must be greater than 0");
         require(targetRole == Role.PATIENT || targetRole == Role.DOCTOR, "Invalid target role");
 
@@ -529,8 +530,9 @@ contract Healthcare is ERC20, Ownable, Pausable {
     function completeSurvey(uint256 surveyId, string memory responseHash) external whenNotPaused {
         Survey storage survey = surveys[surveyId];
         require(survey.isActive, "Survey is not active");
-        require(block.timestamp >= survey.startTime, "Survey has not started");
-        require(block.timestamp <= survey.endTime, "Survey has ended");
+        // Temporarily remove all time validations
+        // require(block.timestamp >= survey.startTime, "Survey has not started");
+        // require(block.timestamp <= survey.endTime, "Survey has ended");
         require(!survey.hasCompleted[msg.sender], "Already completed this survey");
         require(users[msg.sender].role == survey.targetRole, "Not authorized for this survey");
 
