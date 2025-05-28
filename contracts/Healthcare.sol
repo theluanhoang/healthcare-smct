@@ -142,8 +142,8 @@ contract Healthcare is ERC20, Ownable, Pausable {
         verifiedDoctorsCount = 1;
         appointmentCounter = 1;
         
-        // Mint initial supply cho admin
-        _mint(msg.sender, 1000000 * 10**decimals());
+        // Mint initial supply cho admin - giảm xuống 1 triệu token (không nhân với decimals)
+        _mint(msg.sender, 1_000_000);
         
         emit UserRegistered(msg.sender, Role.DOCTOR, "Admin Doctor");
         emit DoctorVerified(msg.sender, "Admin Doctor");
@@ -576,18 +576,19 @@ contract Healthcare is ERC20, Ownable, Pausable {
         require(balanceOf(msg.sender) >= tokenAmount, "Insufficient token balance");
 
         // Tính toán số ETH sẽ nhận được (100,000 token = 1 ETH)
-        uint256 gasAmount = tokenAmount / tokenToGasRate;
-        require(gasAmount > 0, "Exchange amount too small");
-        require(address(this).balance >= gasAmount, "Insufficient gas balance in contract");
+        // Chuyển đổi sang Wei (1 ETH = 10^18 Wei)
+        uint256 ethAmount = (tokenAmount * 1 ether) / tokenToGasRate;
+        require(ethAmount > 0, "Exchange amount too small");
+        require(address(this).balance >= ethAmount, "Insufficient ETH balance in contract");
 
         // Burn tokens
         _burn(msg.sender, tokenAmount);
 
         // Chuyển ETH cho user
-        (bool success, ) = payable(msg.sender).call{value: gasAmount}("");
+        (bool success, ) = payable(msg.sender).call{value: ethAmount}("");
         require(success, "Failed to send ETH");
 
-        emit TokensExchangedForGas(msg.sender, tokenAmount, gasAmount);
+        emit TokensExchangedForGas(msg.sender, tokenAmount, ethAmount);
     }
 
     function updateTokenToGasRate(uint256 newRate) external onlyOwner {
