@@ -56,7 +56,6 @@ contract Healthcare is ERC20, Ownable, Pausable {
         string ipfsHash;
         string fullName;
         string email;
-        uint256 tokenBalance;      // Số dư token của user
         uint256 totalRewardsEarned; // Tổng số token đã nhận được
     }
 
@@ -138,14 +137,13 @@ contract Healthcare is ERC20, Ownable, Pausable {
     constructor() ERC20("Healthcare Token", "HCT") {
         // Khởi tạo admin với role DOCTOR và token ban đầu
         userAddresses.push(msg.sender);
-        users[msg.sender] = User(Role.DOCTOR, true, "", "Admin Doctor", "admin@healthcare.com", 0, 0);
+        users[msg.sender] = User(Role.DOCTOR, true, "", "Admin Doctor", "admin@healthcare.com", 0);
         verificationVotes[msg.sender] = 1;
         verifiedDoctorsCount = 1;
         appointmentCounter = 1;
         
         // Mint initial supply cho admin
         _mint(msg.sender, 1000000 * 10**decimals());
-        users[msg.sender].tokenBalance = 1000000 * 10**decimals();
         
         emit UserRegistered(msg.sender, Role.DOCTOR, "Admin Doctor");
         emit DoctorVerified(msg.sender, "Admin Doctor");
@@ -155,7 +153,7 @@ contract Healthcare is ERC20, Ownable, Pausable {
         if (users[msg.sender].role != Role.NONE) revert UserAlreadyRegistered();
         if (role != Role.PATIENT && role != Role.DOCTOR) revert InvalidRole();
 
-        users[msg.sender] = User(role, role == Role.PATIENT, ipfsHash, fullName, email, 0, 0);
+        users[msg.sender] = User(role, role == Role.PATIENT, ipfsHash, fullName, email, 0);
         userAddresses.push(msg.sender);
         emit UserRegistered(msg.sender, role, fullName);
     }
@@ -530,18 +528,14 @@ contract Healthcare is ERC20, Ownable, Pausable {
     function completeSurvey(uint256 surveyId, string memory responseHash) external whenNotPaused {
         Survey storage survey = surveys[surveyId];
         require(survey.isActive, "Survey is not active");
-        // Temporarily remove all time validations
-        // require(block.timestamp >= survey.startTime, "Survey has not started");
-        // require(block.timestamp <= survey.endTime, "Survey has ended");
         require(!survey.hasCompleted[msg.sender], "Already completed this survey");
         require(users[msg.sender].role == survey.targetRole, "Not authorized for this survey");
 
         survey.hasCompleted[msg.sender] = true;
         survey.responseCount++;
         
-        // Mint tokens và cập nhật số dư
+        // Mint tokens và cập nhật tổng rewards
         _mint(msg.sender, survey.reward);
-        users[msg.sender].tokenBalance += survey.reward;
         users[msg.sender].totalRewardsEarned += survey.reward;
 
         emit SurveyCompleted(surveyId, msg.sender, survey.reward);
@@ -571,7 +565,6 @@ contract Healthcare is ERC20, Ownable, Pausable {
 
         // Mint tokens và cập nhật số dư
         _mint(user, activity.reward);
-        users[user].tokenBalance += activity.reward;
         users[user].totalRewardsEarned += activity.reward;
         activity.participantCount++;
 
@@ -580,16 +573,15 @@ contract Healthcare is ERC20, Ownable, Pausable {
 
     function exchangeTokensForGas(uint256 tokenAmount) external whenNotPaused {
         require(tokenAmount > 0, "Amount must be greater than 0");
-        require(users[msg.sender].tokenBalance >= tokenAmount, "Insufficient token balance");
+        require(balanceOf(msg.sender) >= tokenAmount, "Insufficient token balance");
 
         // Tính toán số ETH sẽ nhận được (100,000 token = 1 ETH)
         uint256 gasAmount = tokenAmount / tokenToGasRate;
         require(gasAmount > 0, "Exchange amount too small");
         require(address(this).balance >= gasAmount, "Insufficient gas balance in contract");
 
-        // Burn tokens và cập nhật số dư
+        // Burn tokens
         _burn(msg.sender, tokenAmount);
-        users[msg.sender].tokenBalance -= tokenAmount;
 
         // Chuyển ETH cho user
         (bool success, ) = payable(msg.sender).call{value: gasAmount}("");
@@ -638,22 +630,17 @@ contract Healthcare is ERC20, Ownable, Pausable {
     }
 
     function getTokenBalance(address user) external view returns (uint256) {
-        return users[user].tokenBalance;
+        return balanceOf(user);
     }
 
     function getTotalRewardsEarned(address user) external view returns (uint256) {
         return users[user].totalRewardsEarned;
     }
 
-    // Override transfer functions to update user balances
+    // Override transfer functions
     function transfer(address to, uint256 amount) public virtual override returns (bool) {
         address owner = _msgSender();
         _transfer(owner, to, amount);
-        
-        // Update user balances
-        users[owner].tokenBalance -= amount;
-        users[to].tokenBalance += amount;
-        
         return true;
     }
 
@@ -661,11 +648,6 @@ contract Healthcare is ERC20, Ownable, Pausable {
         address spender = _msgSender();
         _spendAllowance(from, spender, amount);
         _transfer(from, to, amount);
-        
-        // Update user balances
-        users[from].tokenBalance -= amount;
-        users[to].tokenBalance += amount;
-        
         return true;
     }
 
